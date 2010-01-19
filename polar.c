@@ -128,10 +128,13 @@ struct axn500 {
 		char enabled;
 		char desc[8];
 	} reminders[5];
+	struct axn500_time timezone[2];
+	unsigned char enabled_timezone;
+	unsigned char ampm;
 };
 
 enum {
-	AXN500_CMD_GET_ALARM = 0,
+	AXN500_CMD_GET_TIME = 0,
 	AXN500_CMD_GET_REMINDER1,
 	AXN500_CMD_GET_REMINDER2,
 	AXN500_CMD_GET_REMINDER3,
@@ -163,25 +166,47 @@ static char axn500_parse_byte(char byte, int capsonly)
 	return '?';
 }
 
+static char axn500_parse_hex(char byte)
+{
+	/*
+	 * some values are stored in hex, for example:
+	 *	0x3605
+	 * meaning 5h36min
+	 */
+	return ((byte >> 4) * 10) + (byte & 0x0f);
+}
+
 /*
 get alarm format
 cmd: 0x29
 0                      7                       15                      23                      31
 /----------------------/-----------------------/-----------------------/-----------------------/-----------------
-1b 0c 09 40 32 14 26 17 01 21 00 10 22 11 00 01 0d 0b 0b 8d 8a 8a 8a 0b 16 0b 1c 17 0a af 0b 16 0b 1c 17 0a af
-1b 0c 09 49 09 15 03 18 01 21 00 10 22 11 05 01 0d 0b 0b 8d 8a 8a 8a 0b 16 0b 1c 17 af 8a 0b 16 0b 1c 17 0a af 
-
-                           ^^ ^^ ^^ ^^ ^^ ^^ ^^    ^^ ^^ ^^ ^^ ^^ ^^ ^^
-                           mm hh mm hh mm hh al    |----- desc1 ------| |------ desc2 -----| |----- desc3 ------|
-                            al1   al2   al3  en
-0x10 <- end
-0x0a <- space
-0x0b <- 'A'
+28 1f 0c 09 00 42 05 36 07 01 21 00 10 22 11 00 01 0d 0b 0b 8d 8a 8a 8a 0b 16 0b 1c 17 af 8a 0b 16 0b 1c 17 0a af
+-- --------    ----- ----- ----- ----- ----- -- -- -------------------- -------------------- --------------------
+||    |          |     |     |     |     |   || ||     alarm1 desc         alarm2 desc            alarm3 desc
+||    |          |     |     |     |     |   || ||
+||    |          |     |     |     |     |   || ++- 0x80 = 12h clock, 0xX0 = timezone1, 0xX1 = timezone2
+||    |          |     |     |     |     |   ++---- alarms enabled: 0, 0x1, 0x3, 0x7
+||    |          |     |     |     |     +--------- alarm 3, mm/hh (hex = string)
+||    |          |     |     |     +--------------- alarm 2, mm/hh (hex = string)
+||    |          |     |     +--------------------- alarm 1, mm/hh (hex = string)
+||    |          |     +--------------------------- timezone 2, mm/hh (hex = string)
+||    |          +--------------------------------- timezone 1, mm/hh (hex = string)
+||    +-------------------------------------------- date, dd/mm/YY (hex = value)
+++------------------------------------------------- command code
+strings:
+	0x10 <- end
+	0x0a <- space
+	0x0b <- 'A'
 */
+#define AXN500_DATE_OFFSET		1
+#define AXN500_TIMEZONE1_OFFSET		5
+#define AXN500_TIMEZONE2_OFFSET		7
 #define AXN500_ALARM_MINUTE_OFFSET	9
 #define AXN500_ALARM_ENABLED_OFFSET	15
+#define AXN500_TIMEZONE_SET		16
 #define AXN500_ALARM_DESC_OFFSET	17
-static int axn500_parse_alarm_info(int cmd, struct axn500 *info, char *data)
+static int axn500_parse_time_info(int cmd, struct axn500 *info, char *data)
 {
 	int i, j, pos, enabled;
 	char byte, end;
@@ -190,8 +215,8 @@ static int axn500_parse_alarm_info(int cmd, struct axn500 *info, char *data)
 	/* alarm times are stored with the nominal values but in hex */
 	for (i = 0; i < 3; i++) {
 		pos = AXN500_ALARM_MINUTE_OFFSET + i * 2;
-		info->alarms[i].time.minute = data[pos];
-		info->alarms[i].time.hour = data[pos + 1];
+		info->alarms[i].time.minute = axn500_parse_hex(data[pos]);
+		info->alarms[i].time.hour = axn500_parse_hex(data[pos + 1]);
 		info->alarms[i].enabled = (enabled & (1 << i))? 1 : 0;
 		for (j = 0; j < 7; j++) {
 			pos = AXN500_ALARM_DESC_OFFSET + (i * 7);
@@ -205,6 +230,17 @@ static int axn500_parse_alarm_info(int cmd, struct axn500 *info, char *data)
 		}
 		info->alarms[i].desc[j] = 0;
 	}
+	/* parsing timezone info */
+	pos = AXN500_TIMEZONE1_OFFSET; 
+	info->timezone[0].minute = axn500_parse_hex(data[pos]);
+	info->timezone[0].hour = axn500_parse_hex(data[pos + 1]);
+	pos = AXN500_TIMEZONE2_OFFSET; 
+	info->timezone[1].minute = axn500_parse_hex(data[pos]);
+	info->timezone[1].hour = axn500_parse_hex(data[pos + 1]);
+	pos = AXN500_TIMEZONE_SET;
+	info->enabled_timezone = (data[pos] & 0x1)? 1:0;
+	info->ampm = (data[pos] & 0x80)? 1:0;
+
 	return 0;
 }
 
@@ -241,8 +277,8 @@ static int axn500_parse_reminder_info(int cmd, struct axn500 *info,
 	info->reminders[which].desc[i] = 0;
 
 	i = AXN500_REMINDER_MINUTE_OFFSET;
-	info->reminders[which].time.minute = data[i];
-	info->reminders[which].time.hour = data[i + 1];
+	info->reminders[which].time.minute = axn500_parse_hex(data[i]);
+	info->reminders[which].time.hour = axn500_parse_hex(data[i + 1]);
 
 	i = AXN500_REMINDER_DAY_OFFSET;
 	info->reminders[which].date.day = data[i];
@@ -255,13 +291,195 @@ static int axn500_parse_reminder_info(int cmd, struct axn500 *info,
 	return 0;
 }
 
+/*
+polar-labels.txt
+reminders:
+
+ARIS
+Remind2
+Remind3
+Remind4
+LALA
+
+alarms:
+
+21:01	CAAC
+10:00	ALARM !
+11:22	ALARM !
+setando-hora1.txt
+4:42 -> 5:42 -> 4:42
+00:28:1f:0c:09:00:42:05:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+                  ^^ ^^
+                  mm hh
+
+setando-hora2.txt
+7:36 -> 8:36 -> 7:36
+timezone ativo
+00:28:1f:0c:09:00:42:04:36:08:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+                        ^^ ^^
+                        mm hh
+
+trocando-data.txt
+31/12/09 -> 01/01/10 -> 31/12/09
+timezone2, timezone ativo
+
+00:28:01:01:0a:00:42:04:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+      ^^ ^^ ^^
+      dd mm YY
+
+trocando-timezone.txt
+timezone1 -> timezone2 -> timezone1
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:00:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+                                                   ^^
+
+trocando-tipo-hora.txt
+24 -> 12
+AM -> PM
+12 -> 24
+
+relogio 2, timezone ativo
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:81:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+00:28:1f:0c:09:00:42:04:36:19:01:21:00:10:22:11:00:81:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+00:28:1f:0c:09:00:42:04:36:07:01:21:00:10:22:11:00:01:0d:0b:0b:8d:8a:8a:8a:0b:16:0b:1c:17:af:8a:0b:16:0b:1c:17:0a:af
+                           ^^                      ^^
+
+1b 0c 09 49 09 15 03 18 01 21 00 10 22 11 05 01 0d 0b 0b 8d 8a 8a 8a 0b 16 0b 1c 17 af 8a 0b 16 0b 1c 17 0a af 
+
+                           ^^ ^^ ^^ ^^ ^^ ^^ ^^    ^^ ^^ ^^ ^^ ^^ ^^ ^^
+                           mm hh mm hh mm hh al    |----- desc1 ------| |------ desc2 -----| |----- desc3 ------|
+                            al1   al2   al3  en
+
+00 28 1f 0c 09 00 42 05 36 07 01 21 00 10 22 11 00 01 0d 0b 0b 8d 8a 8a 8a 0b 16 0b 1c 17 af 8a 0b 16 0b 1c 17 0a af
+-- -- --------    ----- ----- ----- ----- ----- -- -- -------------------- -------------------- --------------------
+|| ||    |          |     |     |     |     |   || ||     alarm1 desc         alarm2 desc            alarm3 desc
+|| ||    |          |     |     |     |     |   || ||
+|| ||    |          |     |     |     |     |   || ++- 0x80 = 12h clock, 0xX0 = timezone1, 0xX1 = timezone2
+|| ||    |          |     |     |     |     |   ++---- alarms enabled: 0, 0x1, 0x3, 0x7
+|| ||    |          |     |     |     |     +--------- alarm 3, mm/hh (hex = string)
+|| ||    |          |     |     |     +--------------- alarm 2, mm/hh (hex = string)
+|| ||    |          |     |     +--------------------- alarm 1, mm/hh (hex = string)
+|| ||    |          |     +--------------------------- timezone 2, mm/hh (hex = string)
+|| ||    |          +--------------------------------- timezone 1, mm/hh (hex = string)
+|| ||    +-------------------------------------------- date, dd/mm/YY (hex = value)
+|| ++------------------------------------------------- command code
+++---------------------------------------------------- host -> watch
+
+
+trocando-activitybuttonsound.txt
+on -> off -> on
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:0c:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+
+trocando-altura.txt
+180 -> 200 -> 180
+00:2a:e3:00:c8:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+            ^^ 200 e 180 em hexa
+trocando-atividade.txt
+medium -> low -> medium -> high -> top -> medium
+00:2a:e3:00:b4:12:0c:4e:00:00:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:02:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:03:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                           ^^
+
+trocando-countdown.txt
+0:00:00 -> 1:23:45 -> 0:00:00
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:45:23:01:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                                   ^^ ^^ ^^
+
+trocando-data-aniversario.txt
+18/12/78 -> 19/12/78
+00:2a:e3:00:b4:13:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+               ^^ ^^ ^^
+               dd mm YY  em hexa
+a
+trocando-declination.txt
+0 -> 5 -> 0
+W -> E -> W
+
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:85
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                                                                             ^^
+
+trocando-heart-touch.txt
+switch display -> off -> light -> switch display -> take lap -> switch display
+
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:00:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:01:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:03:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                                ^^
+
+trocando-introanimations.txt
+off -> on -> off
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:00:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                       ^^
+
+trocando-maximo-hr.txt
+180 -> 200 -> 180
+00:2a:e3:00:b4:12:0c:4e:00:01:c8:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                              ^^
+
+trocando-peso.txt
+103 -> 150 -> 103
+00:2a:4b:01:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+      ^^ ^^
+      peso em libras, 0x014b, 0x00e3
+
+trocando-recording-rate.txt
+5s -> 15s -> 60s -> 5min
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:01:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:02:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:03:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                             ^^
+
+trocando-sexo.txt
+male -> female -> male
+00:2a:e3:00:b4:12:0c:4e:01:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                        ^^
+
+trocando-sit-hr.txt
+70 -> 100 -> 70
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:64:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                    ^^
+
+trocando-unidades.txt
+metric -> imperial -> metric
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:06:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                       ^^
+
+trocando-vo2max.txt
+45 -> 90 -> 45
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:5a:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
+                                 ^^
+*/
+
 struct {
 	char cmd[5];
 	char cmdsize;
 	int datasize;
 	int (*parser)(int cmd, struct axn500 *info, char *data);
 } axn500_commands[] = {
-	[AXN500_CMD_GET_ALARM] = { {0x29,}, 1, 38, axn500_parse_alarm_info},
+	[AXN500_CMD_GET_TIME] = { {0x29,}, 1, 38, axn500_parse_time_info},
 	[AXN500_CMD_GET_REMINDER1] = { {0x35, 0x01,}, 2, 14, axn500_parse_reminder_info},
 	[AXN500_CMD_GET_REMINDER2] = { {0x35, 0x02,}, 2, 14, axn500_parse_reminder_info},
 	[AXN500_CMD_GET_REMINDER3] = { {0x35, 0x03,}, 2, 14, axn500_parse_reminder_info},
@@ -322,17 +540,42 @@ static int axn500_get_data(int fd, int cmd, struct axn500 *info)
 static void axn500_print_info(struct axn500 *info)
 {
 	int i;
+	char *ampm;
+	unsigned char hour;
 
+	printf("Clock:\n");
+	for (i = 0; i < 2; i++) {
+		if (info->ampm) {
+			if (info->timezone[i].hour >= 12) {
+				ampm = "PM";
+				hour = info->timezone[i].hour - 12;
+			} else {
+				ampm = "AM";
+				hour = info->timezone[i].hour;
+			}
+			if (hour == 0)
+				hour = 12;
+		} else {
+			hour = info->timezone[i].hour;
+			ampm = "";
+		}
+		printf("\tTime %i: %02i:%02i%s (%s)\n",
+			i,
+			hour,
+			info->timezone[i].minute,
+			ampm,
+			(info->enabled_timezone == i)? "main":"");
+	}
 	printf("Alarms:\n");
 	for (i = 0; i < 3; i++)
-		printf("\t%s\t%02x:%02x (%s)\n", info->alarms[i].desc,
+		printf("\t%s\t%02i:%02i (%s)\n", info->alarms[i].desc,
 			info->alarms[i].time.hour,
 			info->alarms[i].time.minute,
 			info->alarms[i].enabled? "enabled":"disabled");
 
 	printf("Reminders:\n");
 	for (i = 0; i < 5; i++)
-		printf("\t%s\t%02x:%02x %02i/%02i/%02i (%s)\n",
+		printf("\t%s\t%02i:%02i %02i/%02i/%02i (%s)\n",
 		       info->reminders[i].desc,
 		       info->reminders[i].time.hour,
 		       info->reminders[i].time.minute,
