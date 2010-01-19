@@ -131,6 +131,8 @@ struct axn500 {
 	struct axn500_time timezone[2];
 	unsigned char enabled_timezone;
 	unsigned char ampm;
+
+	struct axn500_date date;
 };
 
 enum {
@@ -240,6 +242,12 @@ static int axn500_parse_time_info(int cmd, struct axn500 *info, char *data)
 	pos = AXN500_TIMEZONE_SET;
 	info->enabled_timezone = (data[pos] & 0x1)? 1:0;
 	info->ampm = (data[pos] & 0x80)? 1:0;
+
+	/* parsing date info */
+	pos = AXN500_DATE_OFFSET;
+	info->date.day = data[pos];
+	info->date.month = data[pos + 1];
+	info->date.year = data[pos + 2];
 
 	return 0;
 }
@@ -542,6 +550,10 @@ static void axn500_print_info(struct axn500 *info)
 	int i;
 	char *ampm;
 	unsigned char hour;
+
+	printf("Date: (dd/mm/yy)\n");
+	printf("\t%02i/%02i/%02i\n", info->date.day, info->date.month,
+		info->date.year);
 
 	printf("Clock:\n");
 	for (i = 0; i < 2; i++) {
