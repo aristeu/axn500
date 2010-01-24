@@ -133,6 +133,33 @@ struct axn500 {
 	unsigned char ampm;
 
 	struct axn500_date date;
+
+	struct {
+		struct axn500_date bday;
+		unsigned char height;
+
+		unsigned short weight;
+		unsigned short record_rate;
+
+		unsigned char activity;
+		unsigned char hrmax;
+		unsigned char vomax;
+		unsigned char sit_hr;
+
+		unsigned char activity_button_sound;
+		unsigned char intro_animations;
+		unsigned char imperial;
+		unsigned char declination;
+
+		struct {
+			unsigned char hour;
+			unsigned char minute;
+			unsigned char second;
+		} countdown;
+		unsigned char sex;
+
+		unsigned char htouch;
+	} settings;
 };
 
 enum {
@@ -142,6 +169,7 @@ enum {
 	AXN500_CMD_GET_REMINDER3,
 	AXN500_CMD_GET_REMINDER4,
 	AXN500_CMD_GET_REMINDER5,
+	AXN500_CMD_GET_SETTINGS,
 };
 
 static char axn500_parse_byte(char byte, int capsonly)
@@ -300,6 +328,129 @@ static int axn500_parse_reminder_info(int cmd, struct axn500 *info,
 }
 
 /*
+ * 0                      7                       15                      23                      31
+ * /----------------------/-----------------------/-----------------------/-----------------------/-----------------
+ * 2a e3 00 b4 12 0c 4e 00 01 b4 2d 46 0c 3c 00 02 00 00 00 4c b4 50 a0 50 a0 00 00 20 00 20 80
+ * -- ----- -- -------- -- -- -- -- -- -- -- -- -- -------- -------------------------------- --
+ * ||  ||   ||    ||    || || || || || ||    || ||    ||                                     ++- 0x0F = declination
+ * ||  ||   ||    ||    || || || || || ||    || ||    ++---- countdown ss:mm:hh (hex = string)
+ * ||  ||   ||    ||    || || || || || ||    || ++---------- heart touch (0 = off, 1 = light, 2 = switch display,
+ * ||  ||   ||    ||    || || || || || ||    ||                           3 = take lap)
+ * ||  ||   ||    ||    || || || || || ||    ++------------- record rate (0 = 5s, 1 = 15s, 2 = 60s, 3 = 5min)
+ * ||  ||   ||    ||    || || || || || ++------------------- 0x08 = activity button sound (1 = off)
+ * ||  ||   ||    ||    || || || || ||                       0x04 = intro animations (1 = on)
+ * ||  ||   ||    ||    || || || || ||                       0x02 = metric/imperial (1 = imperial)
+ * ||  ||   ||    ||    || || || || ++---------------------- sit Heart Rate (hex = value)
+ * ||  ||   ||    ||    || || || ++------------------------- VOmax (hex = value)
+ * ||  ||   ||    ||    || || ++---------------------------- HRmax (hex = value)
+ * ||  ||   ||    ||    || ++------------------------------- activity type (0 = low, 1 = medium, 2 = high,
+ * ||  ||   ||    ||    ||                                                  3 = top)
+ * ||  ||   ||    ||    ++---------------------------------- sex (0 = male, 1 = female)
+ * ||  ||   ||    ++---------------------------------------- birthday (dd mm YY, hex = value)
+ * ||  ||   ++---------------------------------------------- height (in cm, hex = value)
+ * ||  ++--------------------------------------------------- weight in lb (22 11 = 0x1122lb, hex = value)
+ * ++------------------------------------------------------- command code
+ */
+
+#define AXN500_SETTINGS_WEIGHT_OFFSET		1
+#define AXN500_SETTINGS_HEIGHT_OFFSET		3
+#define AXN500_SETTINGS_BDAY_OFFSET		4
+
+#define AXN500_SETTINGS_SEX_OFFSET		7
+#define AXN500_SETTINGS_SEX_MALE		0
+#define AXN500_SETTINGS_SEX_FEMALE		1
+
+#define AXN500_SETTINGS_ACTIVITY_OFFSET		8
+#define AXN500_SETTINGS_ACTIVITY_LOW		0
+#define AXN500_SETTINGS_ACTIVITY_MEDIUM		1
+#define AXN500_SETTINGS_ACTIVITY_HIGH		2
+#define AXN500_SETTINGS_ACTIVITY_TOP		3
+
+#define AXN500_SETTINGS_HRMAX_OFFSET		9
+#define AXN500_SETTINGS_VOMAX_OFFSET		10
+#define AXN500_SETTINGS_SITHR_OFFSET		11
+#define AXN500_SETTINGS_MISC_OFFSET		12
+#define AXN500_SETTINGS_RECRATE_OFFSET		14
+
+#define AXN500_SETTINGS_HTOUCH_OFFSET		15
+#define AXN500_SETTINGS_HTOUCH_OFF		0
+#define AXN500_SETTINGS_HTOUCH_LIGHT		1
+#define AXN500_SETTINGS_HTOUCH_SWITCH_DISPLAY	2
+#define AXN500_SETTINGS_HTOUCH_TAKE_LAP		3
+
+#define AXN500_SETTINGS_COUNTDOWN_OFFSET	16
+#define AXN500_SETTINGS_DECLINATION_OFFSET	30
+static int axn500_parse_settings(int cmd, struct axn500 *info, char *data)
+{
+	int pos;
+	unsigned short *weight;
+
+	pos = AXN500_SETTINGS_WEIGHT_OFFSET;
+	weight = (unsigned short *)&data[pos];
+	info->settings.weight = le16toh(*weight);
+
+	pos = AXN500_SETTINGS_HEIGHT_OFFSET;
+	info->settings.height = data[pos];
+
+	pos = AXN500_SETTINGS_BDAY_OFFSET;
+	info->settings.bday.day = data[pos];
+	info->settings.bday.month = data[pos + 1];
+	info->settings.bday.year = data[pos + 2];
+
+	pos = AXN500_SETTINGS_SEX_OFFSET;
+	info->settings.sex = data[pos];
+
+	pos = AXN500_SETTINGS_ACTIVITY_OFFSET;
+	info->settings.activity = data[pos];
+
+	pos = AXN500_SETTINGS_HRMAX_OFFSET;
+	info->settings.hrmax = data[pos];
+
+	pos = AXN500_SETTINGS_VOMAX_OFFSET;
+	info->settings.vomax = data[pos];
+
+	pos = AXN500_SETTINGS_SITHR_OFFSET;
+	info->settings.sit_hr = data[pos];
+
+	pos = AXN500_SETTINGS_MISC_OFFSET;
+	info->settings.activity_button_sound = (data[pos] & 0x08)? 0:1;
+	info->settings.intro_animations = (data[pos] & 0x04)? 1:0;
+	info->settings.imperial = (data[pos] & 0x02)? 1:0;
+
+	pos = AXN500_SETTINGS_RECRATE_OFFSET;
+	switch(data[pos]) {
+		case 0:
+			info->settings.record_rate = 5;
+			break;
+		case 1:
+			info->settings.record_rate = 15;
+			break;
+		case 2:
+			info->settings.record_rate = 60;
+			break;
+		case 3:
+			info->settings.record_rate = 300;
+			break;
+		default:
+			fprintf(stderr, "Strange record rate: %#x\n", data[pos]);
+			break;
+	}
+
+	pos = AXN500_SETTINGS_HTOUCH_OFFSET;
+	info->settings.htouch = data[pos];
+
+	pos = AXN500_SETTINGS_COUNTDOWN_OFFSET;
+	info->settings.countdown.second = axn500_parse_hex(data[pos]);
+	info->settings.countdown.minute = axn500_parse_hex(data[pos + 1]);
+	info->settings.countdown.second = axn500_parse_hex(data[pos + 2]);
+
+	pos = AXN500_SETTINGS_DECLINATION_OFFSET;
+	info->settings.declination = data[pos] & 0x7f;
+
+	return 0;
+}
+
+/*
 polar-labels.txt
 reminders:
 
@@ -377,16 +528,40 @@ relogio 2, timezone ativo
 ++---------------------------------------------------- host -> watch
 
 
+00 2a e3 00 b4 12 0c 4e 00 01 b4 2d 46 0c 3c 00 02 00 00 00 4c b4 50 a0 50 a0 00 00 20 00 20 80
+-- -- ----- -- -------- -- -- -- -- -- -- -- -- -- -------- -------------------------------- --
+|| ||  ||   ||    ||    || || || || || ||    || ||    ||                                     ++- 0x0F = declination
+|| ||  ||   ||    ||    || || || || || ||    || ||    ++---- countdown ss:mm:hh (hex = string)
+|| ||  ||   ||    ||    || || || || || ||    || ++---------- heart touch (0 = off, 1 = light, 2 = switch display,
+|| ||  ||   ||    ||    || || || || || ||    ||                           3 = take lap)
+|| ||  ||   ||    ||    || || || || || ||    ++------------- record rate (0 = 5s, 1 = 15s, 2 = 60s, 3 = 5min)
+|| ||  ||   ||    ||    || || || || || ++------------------- 0x08 = activity button sound (1 = off)
+|| ||  ||   ||    ||    || || || || ||                       0x04 = intro animations (1 = on)
+|| ||  ||   ||    ||    || || || || ||                       0x02 = metric/imperial (1 = imperial)
+|| ||  ||   ||    ||    || || || || ++---------------------- sit Heart Rate (hex = value)
+|| ||  ||   ||    ||    || || || ++------------------------- VOmax (hex = value)
+|| ||  ||   ||    ||    || || ++---------------------------- HRmax (hex = value)
+|| ||  ||   ||    ||    || ++------------------------------- activity type (0 = low, 1 = medium, 2 = high,
+|| ||  ||   ||    ||    ||                                                  3 = top)
+|| ||  ||   ||    ||    ++---------------------------------- sex (0 = male, 1 = female)
+|| ||  ||   ||    ++---------------------------------------- birthday (dd mm YY, hex = value)
+|| ||  ||   ++---------------------------------------------- height (in cm, hex = value)
+|| ||  ++--------------------------------------------------- weight in lb (22 11 = 0x1122lb, hex = value)
+|| ++------------------------------------------------------- command code
+++---------------------------------------------------------- host -> watch
+
 trocando-activitybuttonsound.txt
 on -> off -> on
 00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:0c:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
 00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
-
+                                       ^^
+                                       0x08
 trocando-altura.txt
 180 -> 200 -> 180
 00:2a:e3:00:c8:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
 00:2a:e3:00:b4:12:0c:4e:00:01:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
             ^^ 200 e 180 em hexa
+
 trocando-atividade.txt
 medium -> low -> medium -> high -> top -> medium
 00:2a:e3:00:b4:12:0c:4e:00:00:b4:2d:46:04:3c:00:02:00:00:00:4c:b4:50:a0:50:a0:00:00:20:00:20:80
@@ -493,6 +668,7 @@ struct {
 	[AXN500_CMD_GET_REMINDER3] = { {0x35, 0x03,}, 2, 14, axn500_parse_reminder_info},
 	[AXN500_CMD_GET_REMINDER4] = { {0x35, 0x04,}, 2, 14, axn500_parse_reminder_info},
 	[AXN500_CMD_GET_REMINDER5] = { {0x35, 0x05,}, 2, 14, axn500_parse_reminder_info},
+	[AXN500_CMD_GET_SETTINGS] = { {0x2b,}, 1, 31, axn500_parse_settings},
 	{},
 };
 
@@ -595,6 +771,62 @@ static void axn500_print_info(struct axn500 *info)
 		       info->reminders[i].date.month,
 		       info->reminders[i].date.year,
 		       info->reminders[i].enabled? "enabled":"disabled");
+
+	printf("Settings:\n");
+	printf("\tBirthday (dd/mm/yy): %02i/%02i/%02i\n",
+		info->settings.bday.day,
+		info->settings.bday.month,
+		info->settings.bday.year);
+	printf("\tHeight: %icm\n", info->settings.height);
+	printf("\tWeight: %ilb\n", info->settings.weight);
+	printf("\tRecord Rate: %is\n", info->settings.record_rate);
+	printf("\tActivity level: ");
+	switch (info->settings.activity) {
+	case AXN500_SETTINGS_ACTIVITY_LOW:
+		printf("low");
+		break;
+	case AXN500_SETTINGS_ACTIVITY_MEDIUM:
+		printf("medium");
+		break;
+	case AXN500_SETTINGS_ACTIVITY_HIGH:
+		printf("high");
+		break;
+	case AXN500_SETTINGS_ACTIVITY_TOP:
+		printf("top");
+		break;
+	}
+	printf("\n");
+	printf("\tHR max: %i\n", info->settings.hrmax);
+	printf("\tVOmax: %i\n", info->settings.vomax);
+	printf("\tSit HR: %i\n", info->settings.sit_hr);
+	printf("\tActivity button sound: %s\n",
+		(info->settings.activity_button_sound)? "on":"off");
+	printf("\tIntro animations: %s\n",
+		(info->settings.intro_animations)? "on":"off");
+	printf("\tUnits: %s\n", (info->settings.imperial)? "imperial":"metric");
+	printf("\tDeclination: %i\n", info->settings.declination);
+	printf("\tCountdown (hh:mm:ss): %02i:%02i:%02i\n",
+		info->settings.countdown.hour,
+		info->settings.countdown.minute,
+		info->settings.countdown.second);
+	printf("\tSex: %s\n",
+		(info->settings.sex == AXN500_SETTINGS_SEX_MALE)? "male":"female");
+	printf("\tHeart touch: ");
+	switch (info->settings.htouch) {
+	case AXN500_SETTINGS_HTOUCH_OFF:
+		printf("off");
+		break;
+	case AXN500_SETTINGS_HTOUCH_LIGHT:
+		printf("light");
+		break;
+	case AXN500_SETTINGS_HTOUCH_SWITCH_DISPLAY:
+		printf("switch display");
+		break;
+	case AXN500_SETTINGS_HTOUCH_TAKE_LAP:
+		printf("take lap");
+		break;
+	}
+	printf("\n");
 }
 
 static int axn500_get_info(int fd, struct axn500 *info)
