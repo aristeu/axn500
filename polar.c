@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -696,9 +697,17 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (irda_discover_devices(fd, &addr, 10)) {
-		perror("Error scanning for devices");
-		return 1;
+	while (1) {
+		if (irda_discover_devices(fd, &addr, 10)) {
+			if (errno == EAGAIN) {
+				/* keep trying */
+				sleep(1);
+				continue;
+			}
+			perror("Error scanning for devices");
+			return 1;
+		} else
+			break;
 	}
 
 	addr.sir_family = AF_IRDA;
