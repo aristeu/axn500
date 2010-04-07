@@ -801,14 +801,13 @@ static void show_help(FILE *output)
 {
 	fprintf(output, "axn500 version %s\n\n", version);
 
-	fprintf(output, "axn500 [-n] [options] <command>\n");
+	fprintf(output, "axn500 [options] <command>\n");
 	fprintf(output, "Commands:\n");
 	fprintf(output, "\t-a\t\tprint all available settings\n");
 
 	fprintf(output, "\nOptions:\n");
 	fprintf(output, "\t-d\t\tenable debug\n");
-
-	fprintf(output, "\n\t-n\t\tdon't wait for the watch to be in range\n");
+	fprintf(output, "\t-n\t\tdon't wait for the watch to be in range\n");
 
 	fprintf(output, "\n\t-h\t\tprint this message\n");
 }
