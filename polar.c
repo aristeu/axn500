@@ -31,7 +31,13 @@
 #include <linux/socket.h>
 #include <linux/irda.h>
 
-#define dprintf(x...) do { printf(x); fflush(stdout); } while(0)
+static int axn500_debug;
+#define dprintf(x...) do { \
+		if (axn500_debug) { \
+			printf(x); \
+			fflush(stdout); \
+		} \
+	} while(0)
 #if 0
 Datagram socket - SOCK_DGRAM, IRDAPROTO_UNITDATA
 	SeqPacket sockets provides a reliable, datagram oriented, full duplex connection between two sockets on top of IrLMP.  There is no guarantees that the data arrives in order and there is  no
@@ -111,15 +117,15 @@ static int irda_discover_devices(int fd, struct sockaddr_irda *addr, int max_dev
 	if (tmp == NULL)
 		return -1;
 
-	printf("Scanning...\n");
+	dprintf("Scanning...\n");
 	if (getsockopt(fd, SOL_IRLMP, IRLMP_ENUMDEVICES, tmp, &size))
 		return 1;
 
 	list = (struct irda_device_list *)tmp;
-	printf("Found %i devices:\n", list->len);
+	dprintf("Found %i devices:\n", list->len);
 	for (i = 0; i < list->len; i++) {
  		irda_get_hints(&list->dev[i], buff, sizeof(buff));
-		printf("saddr: %#x, daddr: %#x, charset: %i, hints: %s, desc: [%s]\n",
+		dprintf("saddr: %#x, daddr: %#x, charset: %i, hints: %s, desc: [%s]\n",
 			list->dev[i].saddr, list->dev[i].daddr,
 			list->dev[i].charset, buff,
 			list->dev[i].info);
@@ -554,9 +560,9 @@ static int axn500_get_data(int fd, int cmd, struct axn500 *info)
 		char foo;
 		for (i = 0; i < rc; i++) {
 			foo = buff[i];
-			printf("%02x ", (unsigned char)foo);
+			dprintf("%02x ", (unsigned char)foo);
 		}
-		printf("\n");
+		dprintf("\n");
 	}
 
 	if (axn500_commands[cmd].parser(cmd, info, buff)) {
@@ -756,6 +762,11 @@ int axn500_connect(int fd, int wait)
 	return 0;
 }
 
+void axn500_set_debug(int debug)
+{
+	axn500_debug = debug;
+}
+
 /* client application */
 static int show_all(int wait)
 {
@@ -795,13 +806,14 @@ static void show_help(FILE *output)
 	fprintf(output, "\t-a\t\tprint all available settings\n");
 
 	fprintf(output, "\nOptions:\n");
+	fprintf(output, "\t-d\t\tenable debug\n");
 
 	fprintf(output, "\n\t-n\t\tdon't wait for the watch to be in range\n");
 
 	fprintf(output, "\n\t-h\t\tprint this message\n");
 }
 
-static char *options = "anh";
+static char *options = "andh";
 int main(int argc, char *argv[])
 {
 	int opt, wait = 1;
@@ -810,6 +822,9 @@ int main(int argc, char *argv[])
 		switch(opt) {
 			case 'a':
 				return show_all(wait);
+			case 'd':
+				axn500_set_debug(1);
+				break;
 			case 'n':
 				wait = 0;
 				break;
