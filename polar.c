@@ -502,14 +502,15 @@ struct {
 	char cmdsize;
 	int datasize;
 	int (*parser)(int cmd, struct axn500 *info, char *data);
+	int (*get_raw)(int cmd, struct axn500 *info, char *raw, int raw_size);
 } axn500_commands[] = {
-	[AXN500_CMD_GET_TIME] = { {0x29,}, 1, 38, axn500_parse_time_info},
-	[AXN500_CMD_GET_REMINDER1] = { {0x35, 0x01,}, 2, 14, axn500_parse_reminder_info},
-	[AXN500_CMD_GET_REMINDER2] = { {0x35, 0x02,}, 2, 14, axn500_parse_reminder_info},
-	[AXN500_CMD_GET_REMINDER3] = { {0x35, 0x03,}, 2, 14, axn500_parse_reminder_info},
-	[AXN500_CMD_GET_REMINDER4] = { {0x35, 0x04,}, 2, 14, axn500_parse_reminder_info},
-	[AXN500_CMD_GET_REMINDER5] = { {0x35, 0x05,}, 2, 14, axn500_parse_reminder_info},
-	[AXN500_CMD_GET_SETTINGS] = { {0x2b,}, 1, 31, axn500_parse_settings},
+	[AXN500_CMD_GET_TIME] = { {0x29,}, 1, 38, axn500_parse_time_info, NULL},
+	[AXN500_CMD_GET_REMINDER1] = { {0x35, 0x01,}, 2, 14, axn500_parse_reminder_info, NULL},
+	[AXN500_CMD_GET_REMINDER2] = { {0x35, 0x02,}, 2, 14, axn500_parse_reminder_info, NULL},
+	[AXN500_CMD_GET_REMINDER3] = { {0x35, 0x03,}, 2, 14, axn500_parse_reminder_info, NULL},
+	[AXN500_CMD_GET_REMINDER4] = { {0x35, 0x04,}, 2, 14, axn500_parse_reminder_info, NULL},
+	[AXN500_CMD_GET_REMINDER5] = { {0x35, 0x05,}, 2, 14, axn500_parse_reminder_info, NULL},
+	[AXN500_CMD_GET_SETTINGS] = { {0x2b,}, 1, 31, axn500_parse_settings, NULL},
 	{},
 };
 
@@ -518,7 +519,7 @@ static int axn500_get_data(int fd, int cmd, struct axn500 *info)
 	int i, rc;
 	char buff[100];
 
-	printf("size: %i, [%#x][%#x]\n", axn500_commands[cmd].cmdsize, axn500_commands[cmd].cmd[0],
+	dprintf("size: %i, [%#x][%#x]\n", axn500_commands[cmd].cmdsize, axn500_commands[cmd].cmd[0],
 		axn500_commands[cmd].cmd[1]);
 	rc = write(fd, axn500_commands[cmd].cmd, axn500_commands[cmd].cmdsize);
 	if (rc < 0) {
@@ -544,7 +545,7 @@ static int axn500_get_data(int fd, int cmd, struct axn500 *info)
 		return 1;
 	}
 
-	printf("got %i bytes\n", rc);
+	dprintf("got %i bytes\n", rc);
 	{
 		char foo;
 		for (i = 0; i < rc; i++) {
@@ -556,6 +557,48 @@ static int axn500_get_data(int fd, int cmd, struct axn500 *info)
 
 	if (axn500_commands[cmd].parser(cmd, info, buff)) {
 		fprintf(stderr, "Error parsing reply to command %i\n", cmd);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int axn500_set_data(int fd, int cmd, struct axn500 *info)
+{
+	int rc, size, cmdsize;
+	char raw[100];
+
+	if (axn500_commands[cmd].get_raw == NULL) {
+		fprintf(stderr, "BUG: Command %i doesn't have a get_raw method\n", cmd);
+		return 1;
+	}
+
+	cmdsize = axn500_commands[cmd].cmdsize;
+
+	size = axn500_commands[cmd].get_raw(cmd, info, raw + cmdsize, sizeof(raw) - cmdsize);
+	if (size < 0) {
+		dprintf("Error getting the raw data for command %i\n", cmd);
+		return 1;
+	}
+
+	memcpy(raw, axn500_commands[cmd].cmd, cmdsize);
+
+	rc = write(fd, raw, cmdsize + size);
+	if (rc < 0) {
+		perror("Error while writting command");
+		return 1;
+	}
+
+	/* now wait for the answer */	
+	rc = read(fd, raw, sizeof(raw));
+	if (rc < 0) {
+		perror("Error reading answer");
+		return 1;
+	}
+
+	if (rc != (cmdsize + 1)) {
+		fprintf(stderr, "Unexpected answer size: %i, %i expected\n",
+			rc, cmdsize + 1);
 		return 1;
 	}
 
