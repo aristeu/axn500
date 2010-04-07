@@ -1019,6 +1019,7 @@ static void show_help(FILE *output)
 	fprintf(output, "Commands:\n");
 	fprintf(output, "\t-a\t\tprint all available settings\n");
 	fprintf(output, "\t-g <value>\tget a value from the watch. use 'help' for the list\n");
+	fprintf(output, "\t\t\tmultiple values can be get at once using comma separated list\n");
 
 	fprintf(output, "\nOptions:\n");
 	fprintf(output, "\t-d\t\tenable debug\n");
