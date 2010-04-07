@@ -146,12 +146,12 @@ struct axn500_date {
 };
 
 struct axn500 {
-	struct {
+	struct axn500_alarm {
 		struct axn500_time time;
 		char enabled;
 		char desc[8];
 	} alarms[3];
-	struct {
+	struct axn500_reminder {
 		struct axn500_date date;
 		struct axn500_time time;
 		char enabled;
@@ -163,7 +163,7 @@ struct axn500 {
 
 	struct axn500_date date;
 
-	struct {
+	struct axn500_settings {
 		struct axn500_date bday;
 		unsigned char height;
 
@@ -615,66 +615,51 @@ static int axn500_set_data(int fd, int cmd, struct axn500 *info)
 	return 0;
 }
 
-static void axn500_print_info(struct axn500 *info)
+void axn500_print_alarm(struct axn500 *info, int i)
 {
-	int i;
-	char *ampm;
-	unsigned char hour;
+	printf("%s\t%02i:%02i (%s)", info->alarms[i].desc,
+		info->alarms[i].time.hour,
+		info->alarms[i].time.minute,
+		info->alarms[i].enabled? "enabled":"disabled");
+}
 
-	printf("Date: (dd/mm/yy)\n");
-	printf("\t%02i/%02i/%02i\n", info->date.day, info->date.month,
-		info->date.year);
+void axn500_print_reminder(struct axn500 *info, int i)
+{
+	printf("%s\t%02i:%02i %02i/%02i/%02i (%s)",
+	       info->reminders[i].desc,
+	       info->reminders[i].time.hour,
+	       info->reminders[i].time.minute,
+	       info->reminders[i].date.day,
+	       info->reminders[i].date.month,
+	       info->reminders[i].date.year,
+	       info->reminders[i].enabled? "enabled":"disabled");
+}
 
-	printf("Clock:\n");
-	for (i = 0; i < 2; i++) {
-		if (info->ampm) {
-			if (info->timezone[i].hour >= 12) {
-				ampm = "PM";
-				hour = info->timezone[i].hour - 12;
-			} else {
-				ampm = "AM";
-				hour = info->timezone[i].hour;
-			}
-			if (hour == 0)
-				hour = 12;
-		} else {
-			hour = info->timezone[i].hour;
-			ampm = "";
-		}
-		printf("\tTime %i: %02i:%02i%s (%s)\n",
-			i,
-			hour,
-			info->timezone[i].minute,
-			ampm,
-			(info->enabled_timezone == i)? "main":"");
-	}
-	printf("Alarms:\n");
-	for (i = 0; i < 3; i++)
-		printf("\t%s\t%02i:%02i (%s)\n", info->alarms[i].desc,
-			info->alarms[i].time.hour,
-			info->alarms[i].time.minute,
-			info->alarms[i].enabled? "enabled":"disabled");
+void axn500_print_timezone(struct axn500 *info, int i)
+{
+	printf("%02i:%02i (%s)",
+		info->timezone[i].hour,
+		info->timezone[i].minute,
+		(info->enabled_timezone == i)? "main":"");
+}
 
-	printf("Reminders:\n");
-	for (i = 0; i < 5; i++)
-		printf("\t%s\t%02i:%02i %02i/%02i/%02i (%s)\n",
-		       info->reminders[i].desc,
-		       info->reminders[i].time.hour,
-		       info->reminders[i].time.minute,
-		       info->reminders[i].date.day,
-		       info->reminders[i].date.month,
-		       info->reminders[i].date.year,
-		       info->reminders[i].enabled? "enabled":"disabled");
+void _axn500_print_date(struct axn500_date *date)
+{
+	printf("%02i/%02i/%02i", date->day, date->month, date->year);
+}
 
-	printf("Settings:\n");
-	printf("\tBirthday (dd/mm/yy): %02i/%02i/%02i\n",
-		info->settings.bday.day,
-		info->settings.bday.month,
-		info->settings.bday.year);
-	printf("\tHeight: %icm\n", info->settings.height);
-	printf("\tWeight: %ilb\n", info->settings.weight);
-	printf("\tRecord Rate: %is\n", info->settings.record_rate);
-	printf("\tActivity level: ");
+void axn500_print_date(struct axn500 *info)
+{
+	_axn500_print_date(&info->date);
+}
+
+void axn500_print_birthday(struct axn500 *info)
+{
+	_axn500_print_date(&info->settings.bday);
+}
+
+void axn500_print_activity_level(struct axn500 *info)
+{
 	switch (info->settings.activity) {
 	case AXN500_SETTINGS_ACTIVITY_LOW:
 		printf("low");
@@ -689,23 +674,33 @@ static void axn500_print_info(struct axn500 *info)
 		printf("top");
 		break;
 	}
-	printf("\n");
-	printf("\tHR max: %i\n", info->settings.hrmax);
-	printf("\tVOmax: %i\n", info->settings.vomax);
-	printf("\tSit HR: %i\n", info->settings.sit_hr);
-	printf("\tActivity button sound: %s\n",
-		(info->settings.activity_button_sound)? "on":"off");
-	printf("\tIntro animations: %s\n",
-		(info->settings.intro_animations)? "on":"off");
-	printf("\tUnits: %s\n", (info->settings.imperial)? "imperial":"metric");
-	printf("\tDeclination: %i\n", info->settings.declination);
-	printf("\tCountdown (hh:mm:ss): %02i:%02i:%02i\n",
+}
+
+void axn500_print_activity_button_sound(struct axn500 *info)
+{
+	printf("%s", (info->settings.activity_button_sound)? "on":"off");
+}
+
+void axn500_print_intro_animations(struct axn500 *info)
+{
+	printf("%s", (info->settings.intro_animations)? "on":"off");
+}
+
+void axn500_print_countdown(struct axn500 *info)
+{
+	printf("%02i:%02i:%02i",
 		info->settings.countdown.hour,
 		info->settings.countdown.minute,
 		info->settings.countdown.second);
-	printf("\tSex: %s\n",
-		(info->settings.sex == AXN500_SETTINGS_SEX_MALE)? "male":"female");
-	printf("\tHeart touch: ");
+}
+
+void axn500_print_sex(struct axn500 *info)
+{
+	printf("%s", (info->settings.sex == AXN500_SETTINGS_SEX_MALE)? "male":"female");
+}
+
+void axn500_print_htouch(struct axn500 *info)
+{
 	switch (info->settings.htouch) {
 	case AXN500_SETTINGS_HTOUCH_OFF:
 		printf("off");
@@ -720,6 +715,65 @@ static void axn500_print_info(struct axn500 *info)
 		printf("take lap");
 		break;
 	}
+}
+
+static void axn500_print_info(struct axn500 *info)
+{
+	int i;
+
+	printf("Date: (dd/mm/yy)\n\t");
+	axn500_print_date(info);
+	printf("\n");
+
+	printf("Clock:\n");
+	for (i = 0; i < 2; i++) {
+		printf("\tTime %i", i);
+		axn500_print_timezone(info, i);
+		printf("\n");
+	}
+	printf("Alarms:\n");
+	for (i = 0; i < 3; i++) {
+		printf("\t");
+		axn500_print_alarm(info, i);
+		printf("\n");
+	}
+
+	printf("Reminders:\n");
+	for (i = 0; i < 5; i++) {
+		printf("\t");
+		axn500_print_reminder(info, i);
+		printf("\n");
+	}
+
+	printf("Settings:\n");
+	printf("\tBirthday: ");
+	axn500_print_birthday(info);
+	printf("\n");
+	printf("\tHeight: %icm\n", info->settings.height);
+	printf("\tWeight: %ilb\n", info->settings.weight);
+	printf("\tRecord Rate: %is\n", info->settings.record_rate);
+	printf("\tActivity level: ");
+	axn500_print_activity_level(info);
+	printf("\n");
+	printf("\tHR max: %i\n", info->settings.hrmax);
+	printf("\tVOmax: %i\n", info->settings.vomax);
+	printf("\tSit HR: %i\n", info->settings.sit_hr);
+	printf("\tActivity button sound: ");
+	axn500_print_activity_button_sound(info);
+	printf("\n");
+	printf("\tIntro animations: ");
+	axn500_print_intro_animations(info);
+	printf("\n");
+	printf("\tUnits: %s\n", (info->settings.imperial)? "imperial":"metric");
+	printf("\tDeclination: %i\n", info->settings.declination);
+	printf("\tCountdown (hh:mm:ss): ");
+	axn500_print_countdown(info);
+	printf("\n");
+	printf("\tSex: ");
+	axn500_print_sex(info);
+	printf("\n");
+	printf("\tHeart touch: ");
+	axn500_print_htouch(info);
 	printf("\n");
 }
 
@@ -767,10 +821,9 @@ void axn500_set_debug(int debug)
 	axn500_debug = debug;
 }
 
-/* client application */
-static int show_all(int wait)
+int axn500_fetch_all(int fd, struct axn500 *info)
 {
-	int rc, fd = axn500_init(), i;
+	int i, rc;
 	int cmds[] = { AXN500_CMD_GET_TIME,
 		       AXN500_CMD_GET_REMINDER1,
 		       AXN500_CMD_GET_REMINDER2,
@@ -779,6 +832,20 @@ static int show_all(int wait)
 		       AXN500_CMD_GET_REMINDER5,
 		       AXN500_CMD_GET_SETTINGS,
 		       -1 };
+
+	for (i = 0; cmds[i] != -1; i++) {
+		rc = axn500_get_data(fd, i, info);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
+}
+
+/* client application */
+static int show_all(int wait)
+{
+	int rc, fd = axn500_init();
 	struct axn500 info;
 
 	if (fd < 0)
@@ -788,12 +855,159 @@ static int show_all(int wait)
 	if (rc)
 		return rc;
 
-	for (i = 0; cmds[i] != -1; i++) {
-		rc = axn500_get_data(fd, i, &info);
+	rc = axn500_fetch_all(fd, &info);
+	if (rc)
+		return rc;
+
+	axn500_print_info(&info);
+	return 0;
+}
+
+static int get_value(char *value, int wait)
+{
+	int rc, fd = axn500_init(), i, done_data = 0, multi = 0;
+	struct axn500 info;
+	char *ptr, *start = value, *saved;
+	struct {
+		char *name;
+		int cmd;
+	} values[] = {
+		/* FIXME: be more specific, e.g. alarm1.date */
+		{ "alarm1", AXN500_CMD_GET_TIME },
+		{ "alarm2", AXN500_CMD_GET_TIME },
+		{ "alarm3", AXN500_CMD_GET_TIME },
+		{ "reminder1", AXN500_CMD_GET_REMINDER1 },
+		{ "reminder2", AXN500_CMD_GET_REMINDER2 },
+		{ "reminder3", AXN500_CMD_GET_REMINDER3 },
+		{ "reminder4", AXN500_CMD_GET_REMINDER4 },
+		{ "reminder5", AXN500_CMD_GET_REMINDER5 },
+		{ "timezone1", AXN500_CMD_GET_TIME },
+		{ "timezone2", AXN500_CMD_GET_TIME },
+		{ "timezone", AXN500_CMD_GET_TIME },
+		{ "ampm", AXN500_CMD_GET_TIME },
+		{ "date", AXN500_CMD_GET_TIME },
+		{ "birthday", AXN500_CMD_GET_SETTINGS },
+		{ "height", AXN500_CMD_GET_SETTINGS },
+		{ "weight", AXN500_CMD_GET_SETTINGS },
+		{ "record_rate", AXN500_CMD_GET_SETTINGS },
+		{ "activity", AXN500_CMD_GET_SETTINGS },
+		{ "hrmax", AXN500_CMD_GET_SETTINGS },
+		{ "vomax", AXN500_CMD_GET_SETTINGS },
+		{ "sit_hr", AXN500_CMD_GET_SETTINGS },
+		{ "activity_button_sound", AXN500_CMD_GET_SETTINGS },
+		{ "intro_animations", AXN500_CMD_GET_SETTINGS },
+		{ "imperial", AXN500_CMD_GET_SETTINGS },
+		{ "declination", AXN500_CMD_GET_SETTINGS },
+		{ "countdown", AXN500_CMD_GET_SETTINGS },
+		{ "sex", AXN500_CMD_GET_SETTINGS },
+		{ "htouch", AXN500_CMD_GET_SETTINGS },
+		{ NULL, 0 },
+	};
+
+	if (!strcmp(value, "help")) {
+		for (i = 0; values[i].name != NULL; i++)
+			printf("%s\n", values[i].name);
+		return 0;
+	}
+
+	if (fd < 0)
+		return fd;
+
+	rc = axn500_connect(fd, wait);
+	if (rc)
+		return rc;
+
+	if (strchr(value, ',')) {
+		/* multiple values, fetch all the data */
+		rc = axn500_fetch_all(fd, &info);
 		if (rc)
 			return rc;
+		done_data = 1;
 	}
-	axn500_print_info(&info);
+
+	while (1) {
+		ptr = strtok_r(start, ",", &saved);
+		if (ptr == NULL)
+			break;
+		start = NULL;
+
+		for (i = 0; values[i].name != NULL && strcmp(values[i].name, ptr); i++)
+			;
+
+		if (values[i].name == NULL) {
+			fprintf(stderr, "value %s unsupported\n", ptr);
+			return -1;
+		}
+
+		if (done_data == 0) {
+			rc = axn500_get_data(fd, values[i].cmd, &info);
+			if (rc)
+				return -1;
+		} 
+
+		if (multi)
+			printf(";");
+
+		if (!strcmp(values[i].name, "alarm1")) {
+			axn500_print_alarm(&info, 0);
+		} else if (!strcmp(values[i].name, "alarm2")) {
+			axn500_print_alarm(&info, 1);
+		} else if (!strcmp(values[i].name, "alarm3")) {
+			axn500_print_alarm(&info, 2);
+		} else if (!strcmp(values[i].name, "reminder1")) {
+			axn500_print_reminder(&info, 0);
+		} else if (!strcmp(values[i].name, "reminder2")) {
+			axn500_print_reminder(&info, 1);
+		} else if (!strcmp(values[i].name, "reminder3")) {
+			axn500_print_reminder(&info, 2);
+		} else if (!strcmp(values[i].name, "reminder4")) {
+			axn500_print_reminder(&info, 3);
+		} else if (!strcmp(values[i].name, "reminder5")) {
+			axn500_print_reminder(&info, 4);
+		} else if (!strcmp(values[i].name, "timezone1")) {
+			axn500_print_timezone(&info, 0);
+		} else if (!strcmp(values[i].name, "timezone2")) {
+			axn500_print_timezone(&info, 1);
+		} else if (!strcmp(values[i].name, "timezone")) {
+			printf("%i", info.enabled_timezone + 1);
+		} else if (!strcmp(values[i].name, "ampm")) {
+			printf("%i", info.ampm);
+		} else if (!strcmp(values[i].name, "date")) {
+			axn500_print_date(&info);
+		} else if (!strcmp(values[i].name, "birthday")) {
+			axn500_print_birthday(&info);
+		} else if (!strcmp(values[i].name, "height")) {
+			printf("%i", info.settings.height);
+		} else if (!strcmp(values[i].name, "weight")) {
+			printf("%i", info.settings.weight);
+		} else if (!strcmp(values[i].name, "record_rate")) {
+			printf("%i", info.settings.record_rate);
+		} else if (!strcmp(values[i].name, "activity")) {
+			axn500_print_activity_level(&info);
+		} else if (!strcmp(values[i].name, "hrmax")) {
+			printf("%i", info.settings.hrmax);
+		} else if (!strcmp(values[i].name, "sit_hr")) {
+			printf("%i", info.settings.sit_hr);
+		} else if (!strcmp(values[i].name, "activity_button_sound")) {
+			axn500_print_activity_button_sound(&info);
+		} else if (!strcmp(values[i].name, "intro_animations")) {
+			axn500_print_intro_animations(&info);
+		} else if (!strcmp(values[i].name, "imperial")) {
+			printf("%s", info.settings.imperial? "on":"off");
+		} else if (!strcmp(values[i].name, "declination")) {
+			printf("%i", info.settings.declination);
+		} else if (!strcmp(values[i].name, "countdown")) {
+			axn500_print_countdown(&info);
+		} else if (!strcmp(values[i].name, "sex")) {
+			axn500_print_sex(&info);
+		} else if (!strcmp(values[i].name, "htouch")) {
+			axn500_print_htouch(&info);
+		}
+		/* value */
+		multi = 1;
+	}
+	printf("\n");
+
 	return 0;
 }
 
@@ -804,6 +1018,7 @@ static void show_help(FILE *output)
 	fprintf(output, "axn500 [options] <command>\n");
 	fprintf(output, "Commands:\n");
 	fprintf(output, "\t-a\t\tprint all available settings\n");
+	fprintf(output, "\t-g <value>\tget a value from the watch. use 'help' for the list\n");
 
 	fprintf(output, "\nOptions:\n");
 	fprintf(output, "\t-d\t\tenable debug\n");
@@ -812,7 +1027,7 @@ static void show_help(FILE *output)
 	fprintf(output, "\n\t-h\t\tprint this message\n");
 }
 
-static char *options = "andh";
+static char *options = "andg:h";
 int main(int argc, char *argv[])
 {
 	int opt, wait = 1;
@@ -821,6 +1036,8 @@ int main(int argc, char *argv[])
 		switch(opt) {
 			case 'a':
 				return show_all(wait);
+			case 'g':
+				return get_value(optarg, wait);
 			case 'd':
 				axn500_set_debug(1);
 				break;
