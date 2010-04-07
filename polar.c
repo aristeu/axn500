@@ -26,11 +26,12 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/irda.h>
 
-#define dprintf printf
+#define dprintf(x...) do { printf(x); fflush(stdout); } while(0)
 #if 0
 Datagram socket - SOCK_DGRAM, IRDAPROTO_UNITDATA
 	SeqPacket sockets provides a reliable, datagram oriented, full duplex connection between two sockets on top of IrLMP.  There is no guarantees that the data arrives in order and there is  no
@@ -70,6 +71,9 @@ struct irda_device_info {
 		pos += snprintf(buff, size, "%s", #s); \
 		size -= pos; \
 	}
+
+static char *version = VERSION;
+
 static void irda_get_hints(struct irda_device_info *info, char *buff, int size)
 {
 	unsigned char hint0, hint1;
@@ -713,34 +717,22 @@ static void axn500_print_info(struct axn500 *info)
 	printf("\n");
 }
 
-static int axn500_get_info(int fd, struct axn500 *info)
+int axn500_init(void)
 {
-	int i, rc;
-
-	for (i = 0; axn500_commands[i].parser != NULL; i++) {
-		rc = axn500_get_data(fd, i, info);
-		if (rc != 0) {
-			fprintf(stderr, "Error executing command %i\n", i);
-			return 1;
-		}
-	}
-
-	return 0;
-}
-
-int main(int argc, char *argv[])
-{
-	struct sockaddr_irda addr;
-	struct axn500 info;
 	int fd;
 
 	fd = socket(AF_IRDA, SOCK_STREAM, 0);
-	if (fd < 0) {
+	if (fd < 0)
 		perror("Unable to create socket");
-		return 1;
-	}
 
-	while (1) {
+	return fd;
+}
+
+int axn500_connect(int fd, int wait)
+{
+	struct sockaddr_irda addr;
+
+	do {
 		if (irda_discover_devices(fd, &addr, 10)) {
 			if (errno == EAGAIN) {
 				/* keep trying */
@@ -751,7 +743,7 @@ int main(int argc, char *argv[])
 			return 1;
 		} else
 			break;
-	}
+	} while(wait);
 
 	addr.sir_family = AF_IRDA;
 	strncpy(addr.sir_name, "HRM", sizeof(addr.sir_name));
@@ -759,14 +751,78 @@ int main(int argc, char *argv[])
 		perror("Error connecting");
 		return 1;
 	}
-	printf("connected, grabbing info...\n");
-	fflush(stdout);
+	dprintf("connected\n");
 
-	if (axn500_get_info(fd, &info)) {
-		perror("Error grabbing information");
-		return 1;
+	return 0;
+}
+
+/* client application */
+static int show_all(int wait)
+{
+	int rc, fd = axn500_init(), i;
+	int cmds[] = { AXN500_CMD_GET_TIME,
+		       AXN500_CMD_GET_REMINDER1,
+		       AXN500_CMD_GET_REMINDER2,
+		       AXN500_CMD_GET_REMINDER3,
+		       AXN500_CMD_GET_REMINDER4,
+		       AXN500_CMD_GET_REMINDER5,
+		       AXN500_CMD_GET_SETTINGS,
+		       -1 };
+	struct axn500 info;
+
+	if (fd < 0)
+		return fd;
+
+	rc = axn500_connect(fd, wait);
+	if (rc)
+		return rc;
+
+	for (i = 0; cmds[i] != -1; i++) {
+		rc = axn500_get_data(fd, i, &info);
+		if (rc)
+			return rc;
 	}
 	axn500_print_info(&info);
+	return 0;
+}
+
+static void show_help(FILE *output)
+{
+	fprintf(output, "axn500 version %s\n\n", version);
+
+	fprintf(output, "axn500 [-n] [options] <command>\n");
+	fprintf(output, "Commands:\n");
+	fprintf(output, "\t-a\t\tprint all available settings\n");
+
+	fprintf(output, "\nOptions:\n");
+
+	fprintf(output, "\n\t-n\t\tdon't wait for the watch to be in range\n");
+
+	fprintf(output, "\n\t-h\t\tprint this message\n");
+}
+
+static char *options = "anh";
+int main(int argc, char *argv[])
+{
+	int opt, wait = 1;
+
+	while ((opt = getopt(argc, argv, options)) != -1) {
+		switch(opt) {
+			case 'a':
+				return show_all(wait);
+			case 'n':
+				wait = 0;
+				break;
+			case 'h':
+				show_help(stdout);
+				exit(0);
+			default:
+				fprintf(stderr, "Unknown option: %c\n", opt);
+				show_help(stderr);
+				exit(1);
+		}
+	}
+	show_help(stdout);
 
 	return 0;
 }
