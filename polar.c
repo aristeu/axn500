@@ -524,6 +524,67 @@ struct {
 	{},
 };
 
+/*
+ * Exercise packaging:
+ * | preamble | exercise 1 info | data | exercise 2 info | data  ...
+ * /--- 10 ---/------ ?? -------/....../
+ *
+ * So far, I can't determine the exercise info size, but it's possible to
+ * use 00 00 00 c1 01 as pattern to know the exercise info is over
+ *
+ * Exercise info format:
+ *	      55 05 ec 0c 0c 15
+ *	                  ^^
+ *	                  exercise day
+ *	26 05 20 0c 38 00 01 00
+ *	^^ ^^ ^^
+ *	ss mm hh (start time)
+ *	
+ *	12 29 01 7f bb 13 00 19
+ *	^^ ^^ ^^ ^^ ^^
+ *	|| || || || max
+ *	|| || || average
+ *	|| || hh duration
+ *	|| mm duration
+ *	ss duration
+ *	00 05 00 05 00 07 03 fa
+ *	               ^^^^^ ^^
+ *	                ||   alt min
+ *	                alt max
+ *	02 1c 19 23 00 32 00 00
+ *	^^       ^^
+ *	         trip point 2
+ *	5f b4 00 00 00 00 24 00
+ *	^^ ^^ ^^ ^^ ^^ ^^
+ *	|| || || || || upper3    \
+ *	|| || || || lower3       |
+ *	|| || || upper2          | upper/lower limits
+ *	|| || lower2             |
+ *	|| upper1                |
+ *	lower1                   /
+ *	00 52 27 01 56 00 00 00
+ *	00 00 00 00 00 00 00 00
+ *	00 00 00 00 00 00 00 00
+ *	00 09 04 03 0c 15 05 20
+ *	00 00 00 6b 02 03 b0 2f
+ *	1c 00 00 00 00 00 00 c1
+ *	01
+ *
+ * Every 164 bytes packet begins with a 5 byte header:
+ * ac da 02 43 01 0b 00 53
+ *                      ^^ packet number
+ * The packet number decrements until 01, when the command to send more data
+ * (0x16, 0x2f) should not be used anymore
+ * The data comes in an inverted fashion: first the last exercise header then
+ * the last entry of the last exercise, then the last but one exercise header
+ * and the last entry of the last but one exercise and so on.
+ */
+static int axn500_get_exercise(int fd, struct axn500 *info)
+{
+	/* 0x0B */
+//	[AXN500_CMD_GET_EXERCISE] = { {0x0b,}, 1, }
+}
+
 static int axn500_get_data(int fd, int cmd, struct axn500 *info)
 {
 	int i, rc;
