@@ -137,12 +137,36 @@ static int irda_discover_devices(int fd, struct sockaddr_irda *addr, int max_dev
 struct axn500_time {
 	unsigned char hour;
 	unsigned char minute;
+	unsigned char second;
 };
 
 struct axn500_date {
 	unsigned char year;
 	unsigned char month;
 	unsigned char day;
+};
+
+struct axn500_limit {
+	unsigned char lower;
+	unsigned char upper;
+};
+
+struct axn500_entry {
+	unsigned char hr;
+	signed short altitude;
+};
+
+struct axn500_exercise {
+	struct axn500_date date;
+	struct axn500_time start_time;
+	struct axn500_time duration;
+	struct axn500_limit limits[3];
+	unsigned char max_hr;
+	unsigned char avg_hr;
+	signed short min_alt;
+	signed short max_alt;
+	int entries;
+	struct axn500_entry *data;	
 };
 
 struct axn500 {
@@ -180,15 +204,17 @@ struct axn500 {
 		unsigned char imperial;
 		unsigned char declination;
 
-		struct {
-			unsigned char hour;
-			unsigned char minute;
-			unsigned char second;
-		} countdown;
+		struct axn500_time countdown;
+
 		unsigned char sex;
 
 		unsigned char htouch;
 	} settings;
+
+	struct axn500_exercises {
+		int num;
+		struct axn500_exercise *exercise;
+	} exercises;
 };
 
 enum {
@@ -569,20 +595,294 @@ struct {
  *	00 00 00 6b 02 03 b0 2f
  *	1c 00 00 00 00 00 00 c1
  *	01
+ */
+#define EX_DAY_OFFSET		4
+#define EX_START_TIME_OFFSET	6
+#define EX_DURATION_OFFSET	14
+#define EX_AVG_HR_OFFSET	17
+#define EX_MAX_HR_OFFSET	18
+#define EX_MAX_ALT_OFFSET	27
+#define EX_MIN_ALT_OFFSET	29
+#define EX_LIMITS_OFFSET	38
+static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn500 *info)
+{
+	struct axn500_exercise *exercise;
+	int ex;
+	char *ptr;
+
+	dprintf("Parsing data for %i exercises, %i bytes\n", num_ex, bytes);
+	info->exercises.num = num_ex;
+	info->exercises.exercise = malloc(sizeof(struct axn500_exercise) * num_ex);
+	if (info->exercises.exercise == NULL) {
+		fprintf(stderr, "Not enough memory\n");
+		return 1;
+	}
+
+	ptr = &data[5];
+
+	/* now process each exercise */
+	for (ex = 0; ex < num_ex; ex++) {
+		int j;
+
+		dprintf("====================================\n");
+		dprintf("Processing exercise %i of %i\n", ex, num_ex);
+		exercise = &info->exercises.exercise[ex];
+{
+int i;
+for (i = 0; i < 150; i++) {
+	unsigned char c = ptr[i];
+	if (i == 95)
+		printf("[%02hhx]", c);
+ 	else
+		printf(" %02hhx", c);
+	if (!((i + 1) % 8))
+		printf("\n");
+}
+printf("\n");
+}
+
+dprintf("exercise %i, offset %li\n", ex, (ptr - data));
+		exercise->date.day = ptr[EX_DAY_OFFSET];
+		/* FIXME - no other info other than day */
+
+		exercise->start_time.second = axn500_parse_hex(ptr[EX_START_TIME_OFFSET]);
+		exercise->start_time.minute = axn500_parse_hex(ptr[EX_START_TIME_OFFSET + 1]);
+		exercise->start_time.hour = axn500_parse_hex(ptr[EX_START_TIME_OFFSET + 2]);
+		if (exercise->start_time.hour > 23 ||
+		    exercise->start_time.minute > 59 ||
+		    exercise->start_time.second > 59) {
+			fprintf(stderr, "Error parsing exercise, invalid start "
+				"time (%i:%i:%i)\n",
+				exercise->start_time.hour,
+				exercise->start_time.minute,
+				exercise->start_time.second);
+			return 1;
+		}
+
+dprintf("start time: %i:%i:%i\n", exercise->start_time.hour, exercise->start_time.minute, exercise->start_time.second);
+
+		exercise->duration.second = axn500_parse_hex(ptr[EX_DURATION_OFFSET]);
+		exercise->duration.minute = axn500_parse_hex(ptr[EX_DURATION_OFFSET + 1]);
+		exercise->duration.hour = axn500_parse_hex(ptr[EX_DURATION_OFFSET + 2]);
+		if (exercise->duration.hour > 23 ||
+		    exercise->duration.minute > 59 ||
+		    exercise->duration.second > 59) {
+			fprintf(stderr, "Error parsing exercise, invalid start "
+				"time (%i:%i:%i)\n",
+				exercise->duration.hour,
+				exercise->duration.minute,
+				exercise->duration.second);
+			return 1;
+		}
+dprintf("duration: %i:%i:%i\n", exercise->duration.hour,exercise->duration.minute, exercise->duration.second); 
+
+		for (j = 0; j < 3; j++) {
+			exercise->limits[j].lower = ptr[EX_LIMITS_OFFSET] + (j * 2);
+			exercise->limits[j].upper = ptr[EX_LIMITS_OFFSET] + (j * 2) + 1;
+		}
+
+		exercise->max_hr = ptr[EX_MAX_HR_OFFSET];
+		exercise->avg_hr = ptr[EX_AVG_HR_OFFSET];
+		exercise->min_alt = ptr[EX_MIN_ALT_OFFSET];
+		exercise->max_alt = ptr[EX_MAX_ALT_OFFSET];
+
+		j = (exercise->duration.hour * 60 * 60) +
+		    (exercise->duration.minute * 60) +
+		    exercise->duration.second;
+		/* FIXME - we have fixed 5s periods. need to fetch this from the exercise */
+		exercise->entries = j / 5 + ((j % 5)? 1:0);
+dprintf("exercise entries: %i\n", exercise->entries);
+		exercise->data = malloc(sizeof(struct axn500_entry) * exercise->entries);
+		if (exercise->data == NULL) {
+			fprintf(stderr, "No enough memory\n");
+			for ( ; ex >= 0; ex--) {
+				exercise = &info->exercises.exercise[ex];
+				free(exercise->data);
+			}
+			free(info->exercises.exercise);
+			return 1;
+		}
+
+		/* now find where the data start */
+#if 0
+		found = 0;
+		for (ptr = &data[i]; ptr - data <= bytes - sizeof(exercise_start); ptr++) {
+			if (!memcmp(ptr, exercise_start, sizeof(exercise_start))) {
+				found = 1;
+				break;
+			}
+		}
+		if (found == 0) {
+			int j;
+
+			for (j = 0; j < 500; j++) {
+				fprintf(stderr, "%hhx\t", data[j + i]);
+				if (j && !(j % 8))
+					fprintf(stderr, "\n");
+			}
+			fprintf(stderr, "\n");
+
+			fprintf(stderr, "Unable to find packet start sequence\n");
+			/* FIXME - cleanup */
+			return 1;
+		}
+#endif
+		ptr += 95;
+dprintf("guessing the exercise data begins at %li, first entries:\n", (ptr-data));
+{
+int i;
+unsigned short *s;
+unsigned char hr;
+for (i = 0; i < 10 && i < exercise->entries; i++) {
+hr = ptr[i * 3];
+s = (unsigned short *)&ptr[(i * 3) + 1];
+printf("HR: %hhu %#hhx\talt: %hu %#hx\n", hr,
+		ptr[i * 3], *s - 0x300, *s);
+}
+}
+
+
+		/* get all the entries */
+		for (j = 0; j < exercise->entries; j++) {
+			exercise->data[j].hr = ptr[0];
+			/* the altitude is stored as little endian short, 0x300 is 0 */
+			exercise->data[j].altitude = ((ptr[2] << 8) | ptr[1]) - 0x300;
+			ptr += 3;
+		}
+	}
+	return 0;
+}
+
+/*
  *
- * Every 164 bytes packet begins with a 5 byte header:
- * ac da 02 43 01 0b 00 53
- *                      ^^ packet number
+ * Every 163 bytes packet begins with a 3 byte header:
+ * 0b 00 53
+ *       ^^ packet number
  * The packet number decrements until 01, when the command to send more data
  * (0x16, 0x2f) should not be used anymore
  * The data comes in an inverted fashion: first the last exercise header then
  * the last entry of the last exercise, then the last but one exercise header
  * and the last entry of the last but one exercise and so on.
  */
-static int axn500_get_exercise(int fd, struct axn500 *info)
+#define AXN500_EX_PKT_SIZE 163
+#define AXN500_EX_PKT_HDR_SIZE 3
+#define AXN500_EX_PKT_HDR_NUM 2
+#define AXN500_EX_PKT_PAYLOAD_SIZE (AXN500_EX_PKT_SIZE - AXN500_EX_PKT_HDR_SIZE)
+static char *axn500_get_exercise(int fd, unsigned char *num_ex, int *bytes, struct axn500 *info)
 {
-	/* 0x0B */
-//	[AXN500_CMD_GET_EXERCISE] = { {0x0b,}, 1, }
+	char buff[AXN500_EX_PKT_SIZE], *all;
+	int i, rc;
+	unsigned char packet_count;
+	const char get_exercise_cmd[] = { 0x0b };
+	const char get_next_cmd[] = { 0x16, 0x2f };
+	const char get_exercisenum_cmd[] = { 0x15 };
+
+	rc = write(fd, get_exercisenum_cmd, 1);
+	if (rc < 0) {
+		perror("Error writing get exercise count");
+		return NULL;
+	}
+	rc = read(fd, buff, sizeof(buff));
+	if (rc < 0) {
+		perror("Error getting exercise number");
+		return NULL;
+	}
+	if (rc != 7) {
+		fprintf(stderr, "Unexpected reply size while getting number "
+			"of exercises (expected 7, got %i)\n", rc);
+		return NULL;
+	}
+	*num_ex = buff[3];
+
+	if (*num_ex == 0) {
+		printf("No exercises found on the watch\n");
+		return NULL;
+	}
+
+	rc = write(fd, get_exercise_cmd, 1);
+	if (rc < 0) {
+		perror("Error writing get exercises data");
+		return NULL;
+	}
+	/*
+	 * we get the first package to have an idea of how much we'll need for
+	 * the full thing
+	 */
+	rc = read(fd, buff, sizeof(buff));
+	if (rc < 0) {
+		perror("Error getting exercise data");
+		return NULL;
+	}
+	if (rc < 11) {
+		fprintf(stderr, "Not enough data, got only %i bytes\n", rc);
+		return NULL;
+	}
+
+	packet_count = buff[2];
+	dprintf("Got %i bytes on the first request for info, total packets: "
+		"%i\n", rc, packet_count);
+
+	printf(".");
+	fflush(stdout);
+
+	all = malloc(AXN500_EX_PKT_SIZE * packet_count);
+	if (all == NULL) {
+		fprintf(stderr, "Not enough memory\n");
+		return NULL;
+	}
+	memset(all, 0, AXN500_EX_PKT_SIZE * packet_count);
+
+	memcpy(all, buff, rc);
+	*bytes = rc;
+
+	for (i = 1; i < packet_count; i++) {
+		unsigned char c;
+
+		rc = write(fd, get_next_cmd, 2);
+		if (rc < 0) {
+			perror("Error asking for more data");
+			free(all);
+			return NULL;
+		}
+		rc = read(fd, buff, sizeof(buff));
+		if (rc < 0) {
+			perror("Error getting more data");
+			free(all);
+			return NULL;
+		}
+		printf(".");
+		fflush(stdout);
+		if (rc < AXN500_EX_PKT_SIZE && (i + 1) == packet_count)
+			fprintf(stderr, "Got less data than expected: %i of "
+				"%i, packet %i of %i\n", rc,
+				AXN500_EX_PKT_SIZE,
+				i + 1, packet_count);
+		c = buff[AXN500_EX_PKT_HDR_NUM];
+		if (c != (packet_count - i))
+			fprintf(stderr, "Unexpected packet number: %i, "
+				"expected %i\n", buff[AXN500_EX_PKT_HDR_NUM],
+				(packet_count - i));
+#if 0
+		{
+			int c;
+			for (c = 0; c < rc; c++) {
+				fprintf(stderr, "%hhx\t", buff[c]);
+				if (!(c % 8) && c != 0)
+					fprintf(stderr, "\n");
+			}
+			fprintf(stderr, "\n");
+		}
+#endif
+		/* copy data to the buffer skipping the header present in each
+		 * packet */
+		memcpy(all + *bytes, &buff[AXN500_EX_PKT_HDR_SIZE],
+			AXN500_EX_PKT_PAYLOAD_SIZE);
+		*bytes += AXN500_EX_PKT_PAYLOAD_SIZE;
+	}
+	printf("\n");
+	dprintf("Receive complete, got %i packets\n", packet_count);
+
+	return all;
 }
 
 static int axn500_get_data(int fd, int cmd, struct axn500 *info)
@@ -717,6 +1017,11 @@ void axn500_print_date(struct axn500 *info)
 void axn500_print_birthday(struct axn500 *info)
 {
 	_axn500_print_date(&info->settings.bday);
+}
+
+void _axn500_print_limit(struct axn500_limit *limit)
+{
+	printf("%02i/%02i", limit->lower, limit->upper);
 }
 
 void axn500_print_activity_level(struct axn500 *info)
@@ -1071,6 +1376,151 @@ static int get_value(char *value, int wait)
 
 	return 0;
 }
+	
+static void print_exercises(struct axn500 *info, FILE *output)
+{
+	int i, j;
+
+	for (i = 0; i < info->exercises.num; i++) {
+		struct axn500_exercise *e = &info->exercises.exercise[i];
+
+		fprintf(output, "Exercise %i", i);
+		fprintf(output, "Date:\n");
+		_axn500_print_date(&e->date);
+		fprintf(output, "\n");
+		fprintf(output, "Start time: %i:%i:%i", e->start_time.hour,
+			e->start_time.minute, e->start_time.second);
+		fprintf(output, "\n");
+		fprintf(output, "Duration: %ih%imin%is", e->duration.hour,
+			e->duration.minute, e->duration.second);
+		fprintf(output, "\n");
+		for (j = 0; j < 3; j++) {
+			fprintf(output, "Limit %i (lower/upper): ", j);
+			_axn500_print_limit(&e->limits[j]);
+			fprintf(output, "\n");
+		}
+		fprintf(output, "Maximum HR: %i\n", e->max_hr);
+		fprintf(output, "Average HR: %i\n", e->avg_hr);
+		fprintf(output, "Minimum altitude: %i\n", e->min_alt);
+		fprintf(output, "Data:\n");
+		for (j = 0; j < e->entries; j++)
+			fprintf(output, "%i\t%i\n", e->data[j].hr, e->data[j].altitude);
+	}
+}
+
+static int get_all_exercises(FILE *output, int wait)
+{
+	int rc, fd = axn500_init(), bytes;
+	struct axn500 info;
+	char *ex;
+	unsigned char num_ex;
+
+	if (fd < 0) {
+		fprintf(stderr, "Unable to initialize AXN500\n");
+		return 1;
+	}
+	rc = axn500_connect(fd, wait);
+	if (rc)
+		return rc;
+
+	ex = axn500_get_exercise(fd, &num_ex, &bytes, &info);
+	if (ex == NULL) {
+		fprintf(stderr, "Unable to get exercises from AXN500\n");
+		return 1;
+	}
+
+	printf("Found %i exercises\n", num_ex);
+	if (num_ex == 0)
+		return 0;
+
+{
+int f = open("output.bin", O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+write(f, &num_ex, 1);
+write(f, &bytes, 4);
+dprintf("Writing %i bytes\n", bytes);
+write(f, ex, bytes);
+close(f);
+}
+	rc = axn500_parse_exercises(ex, num_ex, bytes, &info);
+	if (rc) {
+		fprintf(stderr, "Unable to parse exercise data from AXN500\n");
+		return 1;
+	}
+	free(ex);
+
+	print_exercises(&info, output);
+
+	return 0;
+}
+
+static int parse_exercises(const char *filename, FILE *output)
+{
+	int fd = open(filename, O_RDONLY), rc;
+	struct axn500 info;
+	char *ex;
+	unsigned char num_ex;
+	unsigned int bytes;
+
+	if (fd < 0) {
+		perror("Unable to open file");
+		return 1;
+	}
+
+	if (read(fd, &num_ex, 1) != 1) {
+		perror("Unable to read number of exercises");
+		close(fd);
+		return 1;
+	}
+	if (read(fd, &bytes, sizeof(bytes)) != sizeof(bytes)) {
+		perror("Unable to read the exercise size");
+		close(fd);
+		return 1;
+	}
+	if (num_ex == 0 || num_ex > 20) {
+		fprintf(stderr, "Invalid number of exercises (%i). Corrupt file?\n", num_ex);
+		close(fd);
+		return 1;
+	}
+	if (bytes <= 3 || bytes > 50000) {
+		fprintf(stderr, "Invalid exercise size (%i). Corrupt file?\n", bytes);
+		close(fd);
+		return 1;
+	}
+	ex = malloc(bytes);
+	if (ex == NULL) {
+		perror("Unable to allocate memory");
+		close(fd);
+		return 1;
+	}
+	rc = read(fd, ex, bytes);
+	if (rc != bytes) {
+		if (rc < 0) {
+			perror("Unable to read data file");
+			free(ex);
+			close(fd);
+			return 1;
+		} else {
+			fprintf(stderr, "Short read while reading data file: "
+				"wanted %i, got %i\n", bytes, rc);
+			free(ex);
+			close(fd);
+			return 1;
+		}
+	}
+	close(fd);
+
+	rc = axn500_parse_exercises(ex, num_ex, bytes, &info);
+	if (rc) {
+		fprintf(stderr, "Unable to parse exercise data from AXN500\n");
+		free(ex);
+		return 1;
+	}
+	free(ex);
+
+	print_exercises(&info, output);
+
+	return 0;
+}
 
 static void show_help(FILE *output)
 {
@@ -1081,6 +1531,8 @@ static void show_help(FILE *output)
 	fprintf(output, "\t-a\t\tprint all available settings\n");
 	fprintf(output, "\t-g <value>\tget a value from the watch. use 'help' for the list\n");
 	fprintf(output, "\t\t\tmultiple values can be get at once using comma separated list\n");
+	fprintf(output, "\t-e\t\tget all exercises\n");
+	fprintf(output, "\t-p <file>\tparse a raw exercises file and print the result\n");
 
 	fprintf(output, "\nOptions:\n");
 	fprintf(output, "\t-d\t\tenable debug\n");
@@ -1089,7 +1541,7 @@ static void show_help(FILE *output)
 	fprintf(output, "\n\t-h\t\tprint this message\n");
 }
 
-static char *options = "andg:h";
+static char *options = "andeg:p:h";
 int main(int argc, char *argv[])
 {
 	int opt, wait = 1;
@@ -1106,6 +1558,10 @@ int main(int argc, char *argv[])
 			case 'n':
 				wait = 0;
 				break;
+			case 'e':
+				return get_all_exercises(stdout, wait);
+			case 'p':
+				return parse_exercises(optarg, stdout);
 			case 'h':
 				show_help(stdout);
 				exit(0);
