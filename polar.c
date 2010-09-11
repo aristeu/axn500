@@ -1391,6 +1391,7 @@ static void print_exercises(struct axn500 *info, FILE *output)
 			fprintf(output, "\n");
 		}
 		fprintf(output, "KCal: %hi\n", e->kcal);
+		fprintf(output, "Markers: %i\n", e->num_markers);
 		fprintf(output, "Maximum HR: %i\n", e->max_hr);
 		fprintf(output, "Average HR: %i\n", e->avg_hr);
 		fprintf(output, "Minimum altitude: %i\n", e->min_alt);
