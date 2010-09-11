@@ -163,6 +163,8 @@ struct axn500_exercise {
 	struct axn500_limit limits[3];
 	unsigned char max_hr;
 	unsigned char avg_hr;
+	unsigned char num_markers;
+	unsigned short kcal;
 	signed short min_alt;
 	signed short max_alt;
 	int entries;
@@ -563,7 +565,8 @@ struct {
  *	                  ^^
  *	                  exercise day
  *	26 05 20 0c 38 00 01 00
- *	^^ ^^ ^^
+ *	^^ ^^ ^^          ^^
+ *	|| || ||          number of markers (at least one)
  *	ss mm hh (start time)
  *	
  *	12 29 01 7f bb 13 00 19
@@ -598,12 +601,17 @@ struct {
  */
 #define EX_DAY_OFFSET		4
 #define EX_START_TIME_OFFSET	6
+#define EX_MARKERNUM_OFFSET	12
 #define EX_DURATION_OFFSET	14
 #define EX_AVG_HR_OFFSET	17
 #define EX_MAX_HR_OFFSET	18
 #define EX_MAX_ALT_OFFSET	27
 #define EX_MIN_ALT_OFFSET	29
 #define EX_LIMITS_OFFSET	38
+#define EX_KCAL_OFFSET		71
+
+#define EX_HEADER_SIZE		95
+#define EX_MARKER_SIZE		22
 static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn500 *info)
 {
 	struct axn500_exercise *exercise;
@@ -627,21 +635,23 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 		dprintf("====================================\n");
 		dprintf("Processing exercise %i of %i\n", ex, num_ex);
 		exercise = &info->exercises.exercise[ex];
-{
-int i;
-for (i = 0; i < 150; i++) {
-	unsigned char c = ptr[i];
-	if (i == 95)
-		printf("[%02hhx]", c);
- 	else
-		printf(" %02hhx", c);
-	if (!((i + 1) % 8))
-		printf("\n");
-}
-printf("\n");
-}
 
-dprintf("exercise %i, offset %li\n", ex, (ptr - data));
+		#if 0
+		{
+		int i;
+		for (i = 0; i < 150; i++) {
+			unsigned char c = ptr[i];
+			if (i == 95)
+				printf("[%02hhx]", c);
+			else
+				printf(" %02hhx", c);
+			if (!((i + 1) % 8))
+				printf("\n");
+		}
+		printf("\n");
+		}
+		#endif
+
 		exercise->date.day = ptr[EX_DAY_OFFSET];
 		/* FIXME - no other info other than day */
 
@@ -659,8 +669,6 @@ dprintf("exercise %i, offset %li\n", ex, (ptr - data));
 			return 1;
 		}
 
-dprintf("start time: %i:%i:%i\n", exercise->start_time.hour, exercise->start_time.minute, exercise->start_time.second);
-
 		exercise->duration.second = axn500_parse_hex(ptr[EX_DURATION_OFFSET]);
 		exercise->duration.minute = axn500_parse_hex(ptr[EX_DURATION_OFFSET + 1]);
 		exercise->duration.hour = axn500_parse_hex(ptr[EX_DURATION_OFFSET + 2]);
@@ -674,24 +682,26 @@ dprintf("start time: %i:%i:%i\n", exercise->start_time.hour, exercise->start_tim
 				exercise->duration.second);
 			return 1;
 		}
-dprintf("duration: %i:%i:%i\n", exercise->duration.hour,exercise->duration.minute, exercise->duration.second); 
 
 		for (j = 0; j < 3; j++) {
 			exercise->limits[j].lower = ptr[EX_LIMITS_OFFSET] + (j * 2);
 			exercise->limits[j].upper = ptr[EX_LIMITS_OFFSET] + (j * 2) + 1;
 		}
 
+		exercise->num_markers = ptr[EX_MARKERNUM_OFFSET];
 		exercise->max_hr = ptr[EX_MAX_HR_OFFSET];
 		exercise->avg_hr = ptr[EX_AVG_HR_OFFSET];
-		exercise->min_alt = ptr[EX_MIN_ALT_OFFSET];
-		exercise->max_alt = ptr[EX_MAX_ALT_OFFSET];
+		exercise->min_alt = ((ptr[EX_MIN_ALT_OFFSET + 1] << 8) +
+					ptr[EX_MIN_ALT_OFFSET]) - 0x300;
+		exercise->max_alt = ((ptr[EX_MAX_ALT_OFFSET + 1] << 8) +
+					ptr[EX_MAX_ALT_OFFSET]) - 0x300;
+		exercise->kcal = (ptr[EX_KCAL_OFFSET + 1] << 8) + ptr[EX_KCAL_OFFSET];
 
 		j = (exercise->duration.hour * 60 * 60) +
 		    (exercise->duration.minute * 60) +
 		    exercise->duration.second;
 		/* FIXME - we have fixed 5s periods. need to fetch this from the exercise */
 		exercise->entries = j / 5 + ((j % 5)? 1:0);
-dprintf("exercise entries: %i\n", exercise->entries);
 		exercise->data = malloc(sizeof(struct axn500_entry) * exercise->entries);
 		if (exercise->data == NULL) {
 			fprintf(stderr, "No enough memory\n");
@@ -704,49 +714,30 @@ dprintf("exercise entries: %i\n", exercise->entries);
 		}
 
 		/* now find where the data start */
+		ptr += EX_HEADER_SIZE +
+			(exercise->num_markers - 1) * EX_MARKER_SIZE;
+
 #if 0
-		found = 0;
-		for (ptr = &data[i]; ptr - data <= bytes - sizeof(exercise_start); ptr++) {
-			if (!memcmp(ptr, exercise_start, sizeof(exercise_start))) {
-				found = 1;
-				break;
-			}
+		dprintf("guessing the exercise data begins at %li, first "
+			"entries:\n", (ptr-data));
+		{
+		int i;
+		unsigned short *s;
+		unsigned char hr;
+		for (i = 0; i < 10 && i < exercise->entries; i++) {
+			hr = ptr[i * 3];
+			s = (unsigned short *)&ptr[(i * 3) + 1];
+			printf("HR: %hhu %#hhx\talt: %hu %#hx\n", hr,
+					ptr[i * 3], *s - 0x300, *s);
 		}
-		if (found == 0) {
-			int j;
-
-			for (j = 0; j < 500; j++) {
-				fprintf(stderr, "%hhx\t", data[j + i]);
-				if (j && !(j % 8))
-					fprintf(stderr, "\n");
-			}
-			fprintf(stderr, "\n");
-
-			fprintf(stderr, "Unable to find packet start sequence\n");
-			/* FIXME - cleanup */
-			return 1;
 		}
 #endif
-		ptr += 95;
-dprintf("guessing the exercise data begins at %li, first entries:\n", (ptr-data));
-{
-int i;
-unsigned short *s;
-unsigned char hr;
-for (i = 0; i < 10 && i < exercise->entries; i++) {
-hr = ptr[i * 3];
-s = (unsigned short *)&ptr[(i * 3) + 1];
-printf("HR: %hhu %#hhx\talt: %hu %#hx\n", hr,
-		ptr[i * 3], *s - 0x300, *s);
-}
-}
-
 
 		/* get all the entries */
 		for (j = 0; j < exercise->entries; j++) {
 			exercise->data[j].hr = ptr[0];
 			/* the altitude is stored as little endian short, 0x300 is 0 */
-			exercise->data[j].altitude = ((ptr[2] << 8) | ptr[1]) - 0x300;
+			exercise->data[j].altitude = ((ptr[2] << 8) + ptr[1]) - 0x300;
 			ptr += 3;
 		}
 	}
@@ -1384,8 +1375,8 @@ static void print_exercises(struct axn500 *info, FILE *output)
 	for (i = 0; i < info->exercises.num; i++) {
 		struct axn500_exercise *e = &info->exercises.exercise[i];
 
-		fprintf(output, "Exercise %i", i);
-		fprintf(output, "Date:\n");
+		fprintf(output, "Exercise %i\n", i);
+		fprintf(output, "Date: ");
 		_axn500_print_date(&e->date);
 		fprintf(output, "\n");
 		fprintf(output, "Start time: %i:%i:%i", e->start_time.hour,
@@ -1399,9 +1390,11 @@ static void print_exercises(struct axn500 *info, FILE *output)
 			_axn500_print_limit(&e->limits[j]);
 			fprintf(output, "\n");
 		}
+		fprintf(output, "KCal: %hi\n", e->kcal);
 		fprintf(output, "Maximum HR: %i\n", e->max_hr);
 		fprintf(output, "Average HR: %i\n", e->avg_hr);
 		fprintf(output, "Minimum altitude: %i\n", e->min_alt);
+		fprintf(output, "Maximum altitude: %i\n", e->max_alt);
 		fprintf(output, "Data:\n");
 		for (j = 0; j < e->entries; j++)
 			fprintf(output, "%i\t%i\n", e->data[j].hr, e->data[j].altitude);
