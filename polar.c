@@ -151,6 +151,11 @@ struct axn500_limit {
 	unsigned char upper;
 };
 
+struct axn500_marker {
+	struct axn500_time time;
+	struct axn500_time moment;;
+};
+
 struct axn500_entry {
 	unsigned char hr;
 	signed short altitude;
@@ -161,6 +166,7 @@ struct axn500_exercise {
 	struct axn500_time start_time;
 	struct axn500_time duration;
 	struct axn500_limit limits[3];
+	struct axn500_marker markers[5];
 	unsigned char max_hr;
 	unsigned char avg_hr;
 	unsigned char num_markers;
@@ -735,6 +741,12 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 
 		/* get all the entries */
 		for (j = 0; j < exercise->entries; j++) {
+			if ((ptr - data) > bytes) {
+				fprintf(stderr, "Expected more %i entries "
+					"but no enough data",
+					exercise->entries - jl);
+				break;
+			}
 			exercise->data[j].hr = ptr[0];
 			/* the altitude is stored as little endian short, 0x300 is 0 */
 			exercise->data[j].altitude = ((ptr[2] << 8) + ptr[1]) - 0x300;
@@ -1402,7 +1414,7 @@ static void print_exercises(struct axn500 *info, FILE *output)
 	}
 }
 
-static int get_all_exercises(FILE *output, int wait)
+static int get_all_exercises(FILE *output, int wait, const char *save)
 {
 	int rc, fd = axn500_init(), bytes;
 	struct axn500 info;
@@ -1427,14 +1439,22 @@ static int get_all_exercises(FILE *output, int wait)
 	if (num_ex == 0)
 		return 0;
 
-{
-int f = open("output.bin", O_CREAT | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
-write(f, &num_ex, 1);
-write(f, &bytes, 4);
-dprintf("Writing %i bytes\n", bytes);
-write(f, ex, bytes);
-close(f);
-}
+	if (save) {
+		int fd = open(save, O_CREAT | O_TRUNC | O_RDWR,
+				S_IRUSR | S_IWUSR);
+		if (fd < 0) {
+			perror("Error creating file");
+			return 1;
+		}
+		write(fd, &num_ex, 1);
+		/* FIXME - not endian safe */
+		write(fd, &bytes, 4);
+		dprintf("Writing %i bytes\n", bytes);
+		write(fd, ex, bytes);
+		close(fd);
+		return 0;
+	}
+
 	rc = axn500_parse_exercises(ex, num_ex, bytes, &info);
 	if (rc) {
 		fprintf(stderr, "Unable to parse exercise data from AXN500\n");
@@ -1526,6 +1546,8 @@ static void show_help(FILE *output)
 	fprintf(output, "\t-g <value>\tget a value from the watch. use 'help' for the list\n");
 	fprintf(output, "\t\t\tmultiple values can be get at once using comma separated list\n");
 	fprintf(output, "\t-e\t\tget all exercises\n");
+
+	fprintf(output, "\n\t-s <file>\tget all exercises and save in the specified file\n");
 	fprintf(output, "\t-p <file>\tparse a raw exercises file and print the result\n");
 
 	fprintf(output, "\nOptions:\n");
@@ -1535,7 +1557,7 @@ static void show_help(FILE *output)
 	fprintf(output, "\n\t-h\t\tprint this message\n");
 }
 
-static char *options = "andeg:p:h";
+static char *options = "andeg:p:s:h";
 int main(int argc, char *argv[])
 {
 	int opt, wait = 1;
@@ -1553,7 +1575,9 @@ int main(int argc, char *argv[])
 				wait = 0;
 				break;
 			case 'e':
-				return get_all_exercises(stdout, wait);
+				return get_all_exercises(stdout, wait, NULL);
+			case 's':
+				return get_all_exercises(stdout, wait, optarg);
 			case 'p':
 				return parse_exercises(optarg, stdout);
 			case 'h':
