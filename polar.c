@@ -558,6 +558,21 @@ struct {
 	{},
 };
 
+static void dump_context(char *ptr, int offset, int context)
+{
+	int i;
+	unsigned char tmp;
+	fprintf(stderr, "context: ");
+	for (i = offset - context; i < (offset + context); i++) {
+		tmp = ptr[i];
+		if (i == offset)
+			fprintf(stderr, "[%hhx] ", tmp);
+		else
+			fprintf(stderr, "%hhx ", tmp);
+	}
+	fprintf(stderr, "\n");
+}
+
 /*
  * Exercise packaging:
  * | preamble | exercise 1 info | data | exercise 2 info | data  ...
@@ -639,7 +654,7 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 		int j;
 
 		dprintf("====================================\n");
-		dprintf("Processing exercise %i of %i\n", ex, num_ex);
+		dprintf("Processing exercise %i of %i\n", ex + 1, num_ex);
 		exercise = &info->exercises.exercise[ex];
 
 		#if 0
@@ -672,8 +687,12 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 				exercise->start_time.hour,
 				exercise->start_time.minute,
 				exercise->start_time.second);
+			if (axn500_debug)
+				dump_context(ptr, EX_START_TIME_OFFSET, 5);
 			return 1;
 		}
+		dprintf("Got start time %i:%i:%i\n", exercise->start_time.hour,
+			exercise->start_time.minute, exercise->start_time.second);
 
 		exercise->duration.second = axn500_parse_hex(ptr[EX_DURATION_OFFSET]);
 		exercise->duration.minute = axn500_parse_hex(ptr[EX_DURATION_OFFSET + 1]);
@@ -681,13 +700,17 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 		if (exercise->duration.hour > 23 ||
 		    exercise->duration.minute > 59 ||
 		    exercise->duration.second > 59) {
-			fprintf(stderr, "Error parsing exercise, invalid start "
+			fprintf(stderr, "Error parsing exercise, invalid duration "
 				"time (%i:%i:%i)\n",
 				exercise->duration.hour,
 				exercise->duration.minute,
 				exercise->duration.second);
+			if (axn500_debug)
+				dump_context(ptr, EX_DURATION_OFFSET, 5);
 			return 1;
 		}
+		dprintf("Got duration time %i:%i:%i\n", exercise->duration.hour,
+			exercise->duration.minute, exercise->duration.second);
 
 		for (j = 0; j < 3; j++) {
 			exercise->limits[j].lower = ptr[EX_LIMITS_OFFSET] + (j * 2);
@@ -697,11 +720,12 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 		exercise->num_markers = ptr[EX_MARKERNUM_OFFSET];
 		exercise->max_hr = ptr[EX_MAX_HR_OFFSET];
 		exercise->avg_hr = ptr[EX_AVG_HR_OFFSET];
-		exercise->min_alt = ((ptr[EX_MIN_ALT_OFFSET + 1] << 8) +
-					ptr[EX_MIN_ALT_OFFSET]) - 0x300;
+		exercise->min_alt = (((unsigned char)ptr[EX_MIN_ALT_OFFSET + 1] << 8) +
+					(unsigned char)ptr[EX_MIN_ALT_OFFSET]) - 0x300;
+
 		exercise->max_alt = ((ptr[EX_MAX_ALT_OFFSET + 1] << 8) +
-					ptr[EX_MAX_ALT_OFFSET]) - 0x300;
-		exercise->kcal = (ptr[EX_KCAL_OFFSET + 1] << 8) + ptr[EX_KCAL_OFFSET];
+					(unsigned char)ptr[EX_MAX_ALT_OFFSET]) - 0x300;
+		exercise->kcal = (ptr[EX_KCAL_OFFSET + 1] << 8) + (unsigned char)ptr[EX_KCAL_OFFSET];
 
 		j = (exercise->duration.hour * 60 * 60) +
 		    (exercise->duration.minute * 60) +
@@ -744,12 +768,13 @@ static int axn500_parse_exercises(char *data, int num_ex, int bytes, struct axn5
 			if ((ptr - data) > bytes) {
 				fprintf(stderr, "Expected more %i entries "
 					"but no enough data",
-					exercise->entries - jl);
+					exercise->entries - j);
 				break;
 			}
 			exercise->data[j].hr = ptr[0];
 			/* the altitude is stored as little endian short, 0x300 is 0 */
-			exercise->data[j].altitude = ((ptr[2] << 8) + ptr[1]) - 0x300;
+			exercise->data[j].altitude = ((ptr[2] << 8) +
+				(unsigned char)ptr[1]) - 0x300;
 			ptr += 3;
 		}
 	}
