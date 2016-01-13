@@ -1,0 +1,3 @@
+This is an implementation of the protocol and data parsing for the Polar
+AXN500 exercise watch and it's based on data I collected while using the
+official Windows application that comes with it.
