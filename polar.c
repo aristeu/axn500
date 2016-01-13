@@ -1515,7 +1515,7 @@ static int parse_exercises(const char *filename, FILE *output)
 		close(fd);
 		return 1;
 	}
-	if (num_ex == 0 || num_ex > 20) {
+	if (num_ex == 0 || num_ex > 50) {
 		fprintf(stderr, "Invalid number of exercises (%i). Corrupt file?\n", num_ex);
 		close(fd);
 		return 1;
